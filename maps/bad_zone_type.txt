@@ -1,0 +1,4 @@
+nb_drones: 1
+start_hub: a 0 0
+end_hub: b 1 1
+hub: c 2 2 [zone=foo]

@@ -1,4 +1,5 @@
 from src.domain.zone import Zone, ZoneType
+from src.domain.network import Network, Connection
 
 class ParseError(Exception):
     """Raised when the map file does not follow the expected syntax.
@@ -10,6 +11,19 @@ class ParseError(Exception):
         self.line_number = line_number
         self.message = message
         super().__init__(f"Line {self.line_number}: {self.message}")
+
+
+class MapStructureError(Exception):
+    """Raised when the map file is syntactically valid but violates a
+    structural rule (e.g. missing nb_drones, missing start or end zone).
+
+    Attributes:
+        message: A description of which structural rule was violated.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
 
 
 def strip_comment_and_whitespace(raw_line: str) -> str:
@@ -163,4 +177,114 @@ def parse_zone_line(line: str, line_number: int) -> Zone:
                 is_start=is_start, is_end=is_end, color=color)
 
 
-def parse_connection_line():
+def parse_connection_line(line: str, network: Network,
+                          line_number: int) -> Connection:
+    """Parse a 'connection:' line into a Connection.
+
+    Args:
+        line: The already-cleaned line (no comments, no surrounding whitespace).
+        network: The network built so far, used to validate that both
+            endpoints already exist and that the connection is not a duplicate.
+        line_number: The 1-indexed line number, used for error reporting.
+
+    Returns:
+        The Connection described by this line.
+
+    Raises:
+        ParseError: If the line is malformed, references an undefined zone,
+            duplicates an existing connection, or has an invalid capacity value.
+    """
+
+    rest_of_line = line.split(":", 1)[1].strip()
+
+    bracket_index = rest_of_line.find("[")
+    if bracket_index == -1:
+        fixed_part = rest_of_line
+        metadata_raw = ""
+    else:
+        fixed_part = rest_of_line[:bracket_index]
+        closing_index = rest_of_line.find("]", bracket_index)
+        if closing_index == -1:
+            raise ParseError(line_number, "missing closing ']' "
+                                "in metadata block")
+        metadata_raw = rest_of_line[bracket_index + 1:closing_index]
+
+    fixed_part = fixed_part.strip()
+    zone_a_name, zone_b_name = fixed_part.split("-", 1)
+
+    if zone_a_name not in network.zones:
+        raise ParseError(line_number, f"connection references undefined zone: '{zone_a_name}'")
+    if zone_b_name not in network.zones:
+        raise ParseError(line_number, f"connection references undefined zone: '{zone_b_name}'")
+    if network.has_connection(zone_a_name, zone_b_name):
+        raise ParseError(line_number, f"duplicate connection: "
+                        f"'{zone_a_name}-{zone_b_name}'")
+
+    metadata = parse_metadata_block(metadata_raw, line_number)
+
+    max_link_capacity = metadata.get("max_link_capacity", "1")
+    try:
+        max_link_capacity_int = int(max_link_capacity)
+    except ValueError:
+        raise ParseError(line_number, f"invalid max_link_capacity value: "
+                         f"'{max_link_capacity}'")
+    if max_link_capacity_int <= 0:
+        raise ParseError(line_number, f"max_link_capacity must be positive, "
+                         f"got {max_link_capacity_int}")
+
+
+    zone_a = network.zones[zone_a_name]
+    zone_b = network.zones[zone_b_name]
+
+    return Connection(zone_a=zone_a, zone_b=zone_b,
+                      max_link_capacity=max_link_capacity_int)
+
+
+def parse_file(path: str) -> tuple[Network, int]:
+    """Parse a map file into a Network and the declared number of drones.
+
+    Args:
+        path: Path to the map file to parse.
+
+    Returns:
+        A tuple of (network, nb_drones).
+
+    Raises:
+        ParseError: If the file is malformed in any way, or if nb_drones,
+            the start zone, or the end zone are missing.
+    """
+
+    with open(path, "r") as file:
+        network = Network()
+        nb_drones: int | None = None
+        seen_start: bool = False
+        seen_end: bool = False
+
+        for line_number, raw_line in enumerate(file, start=1):
+            line = strip_comment_and_whitespace(raw_line)
+            if line == "":
+                continue
+            if line.startswith("nb_drones:"):
+                nb_drones = parse_nb_drones(line, line_number)
+            elif (line.startswith("start_hub:") or line.startswith("end_hub:")
+                or line.startswith("hub:")):
+                zone = parse_zone_line(line, line_number)
+                network.add_zone(zone)
+                if zone.is_start:
+                    seen_start = True
+                if zone.is_end:
+                    seen_end = True
+            elif line.startswith("connection:"):
+                connection = parse_connection_line(line, network, line_number)
+                network.add_connection(connection)
+            else:
+                raise ParseError(line_number, f"unrecognized line: '{line}'")
+
+    if nb_drones is None:
+        raise MapStructureError("missing nb_drones declaration")
+    if not seen_start:
+        raise MapStructureError("missing start_hub declaration")
+    if not seen_end:
+        raise MapStructureError("missing end_hub declaration")
+
+    return network, nb_drones

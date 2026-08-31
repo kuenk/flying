@@ -1,7 +1,7 @@
 from src.domain.zone import Zone, ZoneType
 from src.domain.connection import Connection
 from src.domain.network import Network
-from src.parsing.parser import parse_zone_line, ParseError
+from src.parsing.parser import MapStructureError, parse_file, parse_zone_line, ParseError
 
 # Construcción manual de una red pequeña: hub -> roof1 -> goal
 hub = Zone("hub", 0, 0, ZoneType.NORMAL, max_drones=1,
@@ -94,3 +94,68 @@ except ParseError as error:
     print(f"OK: corchete sin cerrar detectado -> {error}")
 
 print("parse_zone_line OK")
+
+
+
+
+
+
+
+
+network, nb_drones = parse_file("maps/maps.txt")
+
+assert nb_drones == 5
+assert len(network.zones) == 7
+assert len(network.connections) == 6
+assert network.start_zone is network.zones["hub"]
+assert network.end_zone is network.zones["goal"]
+print("OK: fichero de ejemplo parseado correctamente")
+
+# Tipo de zona inválido
+with open("maps/bad_zone_type.txt", "w") as file:
+    file.write("nb_drones: 1\n")
+    file.write("start_hub: a 0 0\n")
+    file.write("end_hub: b 1 1\n")
+    file.write("hub: c 2 2 [zone=foo]\n")
+try:
+    parse_file("maps/bad_zone_type.txt")
+    print("FALLO: se esperaba ParseError")
+except ParseError as error:
+    print(f"OK: tipo de zona inválido detectado -> {error}")
+
+# Conexión duplicada
+with open("maps/duplicate_connection.txt", "w") as file:
+    file.write("nb_drones: 1\n")
+    file.write("start_hub: a 0 0\n")
+    file.write("end_hub: b 1 1\n")
+    file.write("connection: a-b\n")
+    file.write("connection: b-a\n")
+try:
+    parse_file("maps/duplicate_connection.txt")
+    print("FALLO: se esperaba ParseError")
+except ParseError as error:
+    print(f"OK: conexión duplicada detectada -> {error}")
+
+# Conexión a zona no definida
+with open("maps/undefined_zone.txt", "w") as file:
+    file.write("nb_drones: 1\n")
+    file.write("start_hub: a 0 0\n")
+    file.write("end_hub: b 1 1\n")
+    file.write("connection: a-ghost\n")
+try:
+    parse_file("maps/undefined_zone.txt")
+    print("FALLO: se esperaba ParseError")
+except ParseError as error:
+    print(f"OK: zona no definida detectada -> {error}")
+
+# Falta start_hub -> ahora es MapStructureError, no ParseError
+with open("maps/missing_start.txt", "w") as file:
+    file.write("nb_drones: 1\n")
+    file.write("end_hub: b 1 1\n")
+try:
+    parse_file("maps/missing_start.txt")
+    print("FALLO: se esperaba MapStructureError")
+except MapStructureError as error:
+    print(f"OK: start_hub ausente detectado -> {error}")
+
+print("parse_file OK — Capítulo 3 completo")
