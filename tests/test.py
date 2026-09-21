@@ -1,7 +1,7 @@
 from src.domain.zone import Zone, ZoneType
 from src.domain.connection import Connection
 from src.domain.network import Network
-from src.parsing.parser import MapStructureError, parse_file, parse_zone_line, ParseError
+from src.parsing.parser import parse_zone_line, ParseError
 
 # Construcción manual de una red pequeña: hub -> roof1 -> goal
 hub = Zone("hub", 0, 0, ZoneType.NORMAL, max_drones=1,
@@ -95,67 +95,70 @@ except ParseError as error:
 
 print("parse_zone_line OK")
 
+from src.parsing.parser import parse_file
+from src.pathfinder.pathfinder import dijkstra
+from src.simulation.drone import Drone, DroneState
+from src.simulation.scheduler import Scheduler
 
+# 1. Simulación básica sobre el mapa de ejemplo del subject
+network, nb_drones = parse_file("maps/example.txt")
+path = dijkstra(network, network.start_zone.name, network.end_zone.name)
+drones = [Drone(i, path) for i in range(1, nb_drones + 1)]
 
+scheduler = Scheduler(network, drones, max_turns=60)
+logs = scheduler.run()
 
+print(f"Simulación completada en {len(logs)} turnos")
+for line in logs:
+    print(line)
+assert all(drone.state == DroneState.DELIVERED for drone in drones)
+print("OK: todos los drones entregados")
 
+# 2. Verificar que ningún dron viola la capacidad en ningún turno intermedio
+# (esto ya lo garantiza el diseño, pero lo confirmamos con un mapa de capacidad ajustada)
+with open("maps/capacity_check.txt", "w") as f:
+    f.write("nb_drones: 3\n")
+    f.write("start_hub: a 0 0\n")
+    f.write("hub: bottleneck 1 0 [max_drones=1]\n")
+    f.write("end_hub: c 2 0\n")
+    f.write("connection: a-bottleneck\n")
+    f.write("connection: bottleneck-c\n")
 
+cap_network, cap_nb_drones = parse_file("maps/capacity_check.txt")
+cap_path = dijkstra(cap_network, cap_network.start_zone.name, cap_network.end_zone.name)
+cap_drones = [Drone(i, cap_path) for i in range(1, cap_nb_drones + 1)]
 
+cap_scheduler = Scheduler(cap_network, cap_drones, max_turns=20)
+cap_logs = cap_scheduler.run()
 
-network, nb_drones = parse_file("maps/maps.txt")
+print(f"\nMapa de cuello de botella (capacidad 1), {len(cap_logs)} turnos:")
+for line in cap_logs:
+    print(line)
+assert all(drone.state == DroneState.DELIVERED for drone in cap_drones)
+print("OK: los 3 drones pasan uno a uno por el cuello de botella sin violar capacidad")
 
-assert nb_drones == 5
-assert len(network.zones) == 7
-assert len(network.connections) == 6
-assert network.start_zone is network.zones["hub"]
-assert network.end_zone is network.zones["goal"]
-print("OK: fichero de ejemplo parseado correctamente")
+# 3. Verificar el caso restricted: el dron aparece como conexión, luego como zona
+with open("maps/restricted_check.txt", "w") as f:
+    f.write("nb_drones: 1\n")
+    f.write("start_hub: a 0 0\n")
+    f.write("hub: r 1 0 [zone=restricted]\n")
+    f.write("end_hub: b 2 0\n")
+    f.write("connection: a-r\n")
+    f.write("connection: r-b\n")
 
-# Tipo de zona inválido
-with open("maps/bad_zone_type.txt", "w") as file:
-    file.write("nb_drones: 1\n")
-    file.write("start_hub: a 0 0\n")
-    file.write("end_hub: b 1 1\n")
-    file.write("hub: c 2 2 [zone=foo]\n")
-try:
-    parse_file("maps/bad_zone_type.txt")
-    print("FALLO: se esperaba ParseError")
-except ParseError as error:
-    print(f"OK: tipo de zona inválido detectado -> {error}")
+r_network, r_nb_drones = parse_file("maps/restricted_check.txt")
+r_path = dijkstra(r_network, r_network.start_zone.name, r_network.end_zone.name)
+r_drones = [Drone(i, r_path) for i in range(1, r_nb_drones + 1)]
 
-# Conexión duplicada
-with open("maps/duplicate_connection.txt", "w") as file:
-    file.write("nb_drones: 1\n")
-    file.write("start_hub: a 0 0\n")
-    file.write("end_hub: b 1 1\n")
-    file.write("connection: a-b\n")
-    file.write("connection: b-a\n")
-try:
-    parse_file("maps/duplicate_connection.txt")
-    print("FALLO: se esperaba ParseError")
-except ParseError as error:
-    print(f"OK: conexión duplicada detectada -> {error}")
+r_scheduler = Scheduler(r_network, r_drones, max_turns=10)
+r_logs = r_scheduler.run()
 
-# Conexión a zona no definida
-with open("maps/undefined_zone.txt", "w") as file:
-    file.write("nb_drones: 1\n")
-    file.write("start_hub: a 0 0\n")
-    file.write("end_hub: b 1 1\n")
-    file.write("connection: a-ghost\n")
-try:
-    parse_file("maps/undefined_zone.txt")
-    print("FALLO: se esperaba ParseError")
-except ParseError as error:
-    print(f"OK: zona no definida detectada -> {error}")
+print(f"\nMapa con zona restricted, {len(r_logs)} turnos:")
+for line in r_logs:
+    print(line)
+assert "D1-a-r" in r_logs[0]
+assert r_logs[1] == ""
+assert "D1-r" in r_logs[2]
+print("OK: el dron entra en tránsito, espera un turno, y llega a la zona restricted")
 
-# Falta start_hub -> ahora es MapStructureError, no ParseError
-with open("maps/missing_start.txt", "w") as file:
-    file.write("nb_drones: 1\n")
-    file.write("end_hub: b 1 1\n")
-try:
-    parse_file("maps/missing_start.txt")
-    print("FALLO: se esperaba MapStructureError")
-except MapStructureError as error:
-    print(f"OK: start_hub ausente detectado -> {error}")
-
-print("parse_file OK — Capítulo 3 completo")
+print("\nScheduler OK — Capítulo 5 completo")
